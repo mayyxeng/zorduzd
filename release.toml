@@ -4,5 +4,5 @@ pre-release-replacements = [
 ]
 
 tag = true
-tag-message = "zorduzd: v{{version}}"
+tag-message = "release zorduzd v{{version}}"
 tag-name = "v{{version}}"
