@@ -127,9 +127,7 @@ fn copy_dot_net_objects() -> Result<()> {
     for file in &files {
         let src = dotnet_out.join(file);
         let dest = cargo_out.join(file);
-        fs::copy(&src, &dest).map_err(|e| {
-            Error::other(format!("{}: {e}", src.display()))
-        })?;
+        fs::copy(&src, &dest).map_err(|e| Error::other(format!("{}: {e}", src.display())))?;
     }
 
     Ok(())
