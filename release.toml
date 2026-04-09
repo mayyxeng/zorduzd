@@ -2,3 +2,7 @@ pre-release-replacements = [
   { file = "src/zorduzd.csproj", search = "<Version>.*</Version>", replace = "<Version>{{version}}</Version>" },
   { file = "src/Plugin.cs", search = 'PLUGIN_VERSION = ".*"', replace = 'PLUGIN_VERSION = "{{version}}"' },
 ]
+
+tag = true
+tag-message = "zorduzd: v{{version}}"
+tag-name = "v{{version}}"
