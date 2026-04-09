@@ -4,6 +4,7 @@ description = "FFB support mod for Moza AB6 for Nuclear Option"
 version = "0.1.0"
 edition = "2024"
 license-file = "LICENSE.md"
+repository = "https://github.com/mayyxeng/zorduzd"
 
 [dependencies]
 eframe = "0.34.1"
