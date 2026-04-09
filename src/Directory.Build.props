@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <BaseOutputPath>..\target\bepinex\bin</BaseOutputPath>
+    <BaseIntermediateOutputPath>..\target\bepinex\obj</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,5 @@
+## Rust stuff
+/target
+# dlls from NuclearOption, this folder is created by a script and must not be addmitted to git
+ext/
+
