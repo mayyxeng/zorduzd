@@ -1,10 +1,9 @@
-# Zorduzd: Nuclear Option Moza FFB Support
+# Zōrduzd: Nuclear Option Moza FFB Support
 Zorduzd is a tiny mod to enable force feedback on Moza flight sticks in Nuclear Option.
-Nuclear Option on its own actually does not support any form of force feedback.
 
 
 ## How to Use
-
+### Manual
 1. Install [BepInEx 5](https://docs.bepinex.dev/articles/user_guide/installation/index.html) into your Nuclear Option game directory. You should optionally install [BepInEx configuration manager](https://github.com/BepInEx/BepInEx.ConfigurationManager) too.
 
 2. Copy `zorduzd.dll` into `BepInEx/plugins/`.
@@ -17,7 +16,8 @@ The plugin streams telemetry to `DCS.exe` on port `3480`.
 Both ports are configurable:
 1. Plugin: while in game press `f1` (requires [BepInEx configuration manager]) and modify the port the game uses to stream its data.
 2. `DCS.exe`: before starting the program, modify `zorduzd.cfg` (if it does not exists, run `DCS.exe` once and quite) to set your desired ports. `moza` must match the port that Moza Cock pit sets for DCS and the `game` port must match the one from step 1.
-
+### Automatic
+COMING SOON
 
 ## Configuring the FFB Feel
 To configure how the FFB feels, you must open Moza Cockpit and load or create your profile.
@@ -25,8 +25,14 @@ At the moment, the mod make Moza cockpit believe that DCS and that the user is f
 This is probaly good representation for the A-19 aircraft in Nuclear Options but for others, you must create and load your desired profile.
 Additionally, Moza does not enable lots of cool FFB effects like wind turbulance, or even weapon discharge, so even with the default A-10C-II config, you  might want to turn on and adjust more effects.
 E.g., here is what I have:
-![create some user profiles](assets/profiles_moza.png)
-![enable extra effects](assets/effects_moza.png)
+<div style="display: flex; padding: 10px">
+    <div style="padding: 10px; width: 50%">
+        <img src="assets/profiles_moza.png" alt="create some user profiles"/>
+    </div>
+    <div style="padding: 10px; width: 50%">
+        <img src="assets/effects_moza.png" alt="enable extra effects"/>
+    </div>
+</div>
 
 ## How it works
 
@@ -76,3 +82,12 @@ I was insipred by this trick to make Zorduzd without having to deal with calcula
 ## [NOFFB (Force Feedback Plugin for Nuclear Option)](https://github.com/KopterBuzz/NOFFB?tab=readme-ov-file)
 This a force feedback mod for Nuclear Option that (at the time of writing) uses direct input, so it should work for any controller.
 I made my own mod after stumbling upon NOFFB. This was quite helpful for me to learn about the BepInEx plugin system for Unity.
+
+<sup>
+Zōrduzd means "Force Stealer" in Persian.
+</sup>
+</br>
+<sup>
+Licensed under <a href="LICENSE.md">MIT license</a>.
+</sup>
+
