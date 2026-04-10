@@ -4,7 +4,7 @@ use std::sync::Arc;
 use zorduzd::app::App;
 
 use eframe::NativeOptions;
-use egui::ViewportBuilder;
+use egui::{IconData, ViewportBuilder};
 use tokio::runtime::Builder;
 use zorduzd::worker::*;
 
@@ -30,6 +30,25 @@ impl Cfg {
     }
 }
 
+fn load_icon() -> IconData {
+    use image::imageops::FilterType;
+    use image::{ImageFormat, ImageReader};
+    let img = ImageReader::with_format(
+        std::io::Cursor::new(include_bytes!("../assets/zorduzd.png")),
+        ImageFormat::Png,
+    )
+    .decode()
+    .unwrap()
+    .resize(64, 64, FilterType::Gaussian)
+    .into_rgba8();
+    let width = img.width();
+    let height = img.height();
+    IconData {
+        rgba: img.to_vec(),
+        width,
+        height,
+    }
+}
 fn load_cfg(shared_state: &SharedState) {
     let exe_dir = std::env::current_exe()
         .ok()
@@ -81,7 +100,11 @@ fn main() {
     });
     let app = App::new(Arc::clone(&shared_state));
     let native_options = NativeOptions {
-        viewport: ViewportBuilder::default().with_min_inner_size([750.0, 850.0]),
+        viewport: ViewportBuilder::default()
+            .with_min_inner_size([750.0, 850.0])
+            .with_title("zōrduzd")
+            .with_taskbar(true)
+            .with_icon(load_icon()),
         ..Default::default()
     };
     log::info!("starting the ui");

@@ -84,10 +84,11 @@ This a force feedback mod for Nuclear Option that (at the time of writing) uses 
 I made my own mod after stumbling upon NOFFB. This was quite helpful for me to learn about the BepInEx plugin system for Unity.
 
 <sup>
-Zōrduzd means "Force Stealer" in Persian.
+Zōrduzd means "Force Stealer" in Persian (زوردزد).
 </sup>
 </br>
 <sup>
 Licensed under <a href="LICENSE.md">MIT license</a>.
 </sup>
-
+</br>
+<img src="assets/zorduzd.png" width="64px" height="64px" alt="Zōrduzd (zwldwct') in book Pahlavi"/>
