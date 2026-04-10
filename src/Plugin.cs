@@ -15,7 +15,7 @@ public static class MyPluginInfo
 {
     public const string PLUGIN_GUID = "zorduzd";
     public const string PLUGIN_NAME = "zorduzd";
-    public const string PLUGIN_VERSION = "0.1.0";
+    public const string PLUGIN_VERSION = "0.1.1";
 }
 
 [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
