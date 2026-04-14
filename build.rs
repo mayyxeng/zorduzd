@@ -133,10 +133,17 @@ fn copy_dot_net_objects() -> Result<()> {
     Ok(())
 }
 
+fn embed_icon() -> Result<()> {
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon("assets/zorduzd.ico");
+    res.compile().map_err(Error::other)
+}
+
 fn main() -> Result<()> {
     check_tools()?;
     populate_ext_dlls()?;
     add_dotnet_sources()?;
     build_dot_net()?;
-    copy_dot_net_objects()
+    copy_dot_net_objects()?;
+    embed_icon()
 }
