@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Error};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 pub const MOZA_COCKPIT_DEFAULT_PORT: u16 = 3476;
@@ -116,24 +116,6 @@ impl TcpPort {
     pub fn read(&self) -> u16 {
         self.0.lock().0
     }
-}
-pub enum UiCommand {
-    Data(MozaFFBData),
-    UiInfo(String),
-    ServerKilled,
-    ServerConnected,
-    ServerFailed(Error),
-    GameKilled,
-    GameConnected,
-    GameFailed(Error),
-    MozaKilled,
-    MozaConnected,
-    MozaFailed(Error),
-}
-pub enum WorkerCommand {
-    GamePort(u16),
-    MozaPort(u16),
-    Closed,
 }
 
 impl Worker {
