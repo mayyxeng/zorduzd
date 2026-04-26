@@ -1,7 +1,7 @@
 """Build release archives for zorduzd.
 
 Produces:
-  target/dist/zorduzd-{version}-win-x86_64.tar.gz  (binaries)
+  target/dist/zorduzd-{version}-win-x86_64.zip      (binaries)
   target/dist/zorduzd-{version}-src.zip             (sources)
   target/dist/zorduzd-{version}-src.tar.gz          (sources)
 """
@@ -82,10 +82,12 @@ def pack_binaries(release_dir: Path, dist_dir: Path, name: str):
     for f in ROOT_FILES:
         shutil.copy2(release_dir / f, stage / f)
 
-    tar_path = dist_dir / f"{name}-win-x86_64.tar.gz"
-    with tarfile.open(tar_path, "w:gz") as tf:
-        tf.add(stage, arcname="Zorduzd")
-    print(f"Created {tar_path}")
+    zip_path = dist_dir / f"{name}-win-x86_64.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file in stage.rglob("*"):
+            if file.is_file():
+                zf.write(file, Path("Zorduzd") / file.relative_to(stage))
+    print(f"Created {zip_path}")
 
 
 def pack_sources(dist_dir: Path, name: str):
