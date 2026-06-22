@@ -16,7 +16,7 @@ public static class MyPluginInfo
 {
     public const string PLUGIN_GUID = "zorduzd";
     public const string PLUGIN_NAME = "zorduzd";
-    public const string PLUGIN_VERSION = "0.3.3";
+    public const string PLUGIN_VERSION = "0.3.4";
 }
 
 [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
@@ -756,10 +756,19 @@ public class Plugin : BaseUnityPlugin
         {
             return;
         }
-        string oldStr = oldValue == null ? "null" : oldValue.ToString();
-        string newStr = newValue == null ? "null" : newValue.ToString();
+        string oldStr = FormatSniffValue(oldValue);
+        string newStr = FormatSniffValue(newValue);
         string prefix = snapshot ? $"{tickCount},SNAPSHOT" : tickCount.ToString();
         snifferWriter.WriteLine($"{prefix},{className},{fieldName},{instanceId},{oldStr},{newStr}");
+    }
+
+    private static string FormatSniffValue(object v)
+    {
+        if (v == null)
+            return "null";
+        if (v is IFormattable f)
+            return f.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+        return v.ToString();
     }
 
     private void OnGUI()
