@@ -17,6 +17,12 @@ pub struct MozaFFBData {
     /// Source: `LoGetSelfData().Name`
     pub aircraft_name: Aircraft,
 
+    /// Raw, unparsed `aircraft_name` value as received from the game, kept alongside the
+    /// matched `aircraft_name` enum so callers with access to a user-configured NO->DCS
+    /// name mapping (which this module is intentionally decoupled from) can still recover it.
+    #[serde(skip)]
+    pub raw_aircraft_name: String,
+
     /// Left engine RPM as a percentage.
     /// Range: 0.0 to 100.0 (Standard DCS) or 0.0 to 1.0.
     /// Source: `LoGetEngineInfo().RPM`
@@ -214,6 +220,7 @@ impl MozaFFBData {
 
             match key {
                 "aircraft_name" => {
+                    data.raw_aircraft_name = value.to_string();
                     if let Some(a) = Aircraft::from_telemetry_name(value) {
                         data.aircraft_name = a;
                     }
@@ -315,6 +322,7 @@ impl MozaFFBData {
             light_apu_ready,
             light_gear_warning,
             light_gear_indicator,
+            raw_aircraft_name: _,
         } = self;
         ui.spacing_mut().slider_width = 50.0;
         ui.label("Aircraft");
