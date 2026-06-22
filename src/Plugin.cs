@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -15,7 +16,7 @@ public static class MyPluginInfo
 {
     public const string PLUGIN_GUID = "zorduzd";
     public const string PLUGIN_NAME = "zorduzd";
-    public const string PLUGIN_VERSION = "0.3.2";
+    public const string PLUGIN_VERSION = "0.3.3";
 }
 
 [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
@@ -49,9 +50,20 @@ public class Plugin : BaseUnityPlugin
     // private ConfigEntry<string> configIp;
     private ConfigEntry<int> configPort;
     private ConfigEntry<bool> configEnableDebugUi;
+    private ConfigEntry<bool> configSnifferEnable;
+    private ConfigEntry<string> configSnifferTargetClassNameContains;
+    private ConfigEntry<string> configSnifferSnapshotKey;
 
     // Debug ui
     private Rect windowRect = new Rect(100, 100, 450, 1200);
+
+    // Sniffer state
+    private KeyCode snifferSnapshotKeyCode = KeyCode.F9;
+    private StreamWriter snifferWriter;
+    private bool componentDumpDone;
+    private readonly Dictionary<string, object> snifferLastValues = new Dictionary<string, object>();
+    private static readonly Dictionary<Type, FieldInfo[]> snifferFieldInfoCache =
+        new Dictionary<Type, FieldInfo[]>();
 
     private void Awake()
     {
@@ -63,7 +75,38 @@ public class Plugin : BaseUnityPlugin
         // configIp = Config.Bind("Networking", "ip", IPAddress.Loopback.ToString(), "IP address to listen on");
         configPort = Config.Bind("Networking", "port", 3480, "TCP port to listen on");
         configEnableDebugUi = Config.Bind("Debug", "enableUi", false, "Enable debug UI");
+        configSnifferEnable = Config.Bind(
+            "Sniffer",
+            "enable",
+            false,
+            "Master switch for the telemetry field sniffer. Disabled by default; no files are written when off."
+        );
+        configSnifferTargetClassNameContains = Config.Bind(
+            "Sniffer",
+            "targetClassNameContains",
+            "",
+            "Case-insensitive substring filter for component class names to sniff. Empty disables field-diff logging (component tree dump still runs)."
+        );
+        configSnifferSnapshotKey = Config.Bind(
+            "Sniffer",
+            "snapshotKey",
+            "F9",
+            "Legacy Input Manager KeyCode name that triggers a forced snapshot dump of all matching components."
+        );
         Logger.LogInfo("Configurations loaded");
+
+        if (configSnifferEnable.Value)
+        {
+            if (!Enum.TryParse<KeyCode>(configSnifferSnapshotKey.Value, true, out snifferSnapshotKeyCode))
+            {
+                Logger.LogWarning(
+                    $"Invalid Sniffer.snapshotKey '{configSnifferSnapshotKey.Value}', falling back to F9"
+                );
+                snifferSnapshotKeyCode = KeyCode.F9;
+            }
+            string snifferLogPath = Path.Combine(Paths.PluginPath, "zorduzd_sniffer.log");
+            snifferWriter = new StreamWriter(snifferLogPath, append: false) { AutoFlush = true };
+        }
 
         StartTcpListener();
         configPort.SettingChanged += (sender, args) => StartTcpListener();
@@ -331,6 +374,7 @@ public class Plugin : BaseUnityPlugin
         tickCount++;
         if (!MissionManager.IsRunning)
         {
+            componentDumpDone = false;
             return;
         }
         Aircraft aircraft;
@@ -340,6 +384,9 @@ public class Plugin : BaseUnityPlugin
             // Logger.LogError("Could not retrive the local aircraft");
             return;
         }
+
+        RunSniffer(aircraft);
+
         if (aircraft.pilots.Length == 0)
         {
             Logger.LogError("Could not retrive the local pilot");
@@ -560,6 +607,161 @@ public class Plugin : BaseUnityPlugin
         }
     }
 
+    private void RunSniffer(Aircraft aircraft)
+    {
+        if (!configSnifferEnable.Value)
+        {
+            return;
+        }
+
+        SnifferDumpComponentsOnce(aircraft);
+
+        string filter = configSnifferTargetClassNameContains.Value;
+        if (string.IsNullOrEmpty(filter))
+        {
+            return;
+        }
+
+        var matches = new List<MonoBehaviour>();
+        foreach (MonoBehaviour comp in aircraft.GetComponentsInChildren<MonoBehaviour>(true))
+        {
+            if (comp.GetType().Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                matches.Add(comp);
+            }
+        }
+
+        foreach (MonoBehaviour comp in matches)
+        {
+            SnifferLogComponent(comp, snapshot: false);
+        }
+
+        // Legacy Input Manager, not the new Input System: a parallel control measurement in
+        // NOVR found the new Input System dropping keyboard events under OpenXR via Virtual
+        // Desktop, while the legacy manager kept working. Not verified in NO's non-VR mode,
+        // but legacy is the safe choice here at no extra cost.
+        if (UnityEngine.Input.GetKeyDown(snifferSnapshotKeyCode))
+        {
+            foreach (MonoBehaviour comp in matches)
+            {
+                SnifferLogComponent(comp, snapshot: true);
+            }
+        }
+    }
+
+    private void SnifferDumpComponentsOnce(Aircraft aircraft)
+    {
+        if (componentDumpDone)
+        {
+            return;
+        }
+        componentDumpDone = true;
+        try
+        {
+            string path = Path.Combine(Paths.PluginPath, "zorduzd_components.log");
+            using (var writer = new StreamWriter(path, append: false))
+            {
+                foreach (MonoBehaviour comp in aircraft.GetComponentsInChildren<MonoBehaviour>(true))
+                {
+                    writer.WriteLine($"{SnifferHierarchyPath(comp.transform)} :: {comp.GetType().FullName}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"Sniffer component dump failed: {ex.Message}");
+        }
+    }
+
+    private static string SnifferHierarchyPath(Transform t)
+    {
+        string path = t.name;
+        Transform parent = t.parent;
+        while (parent != null)
+        {
+            path = $"{parent.name}/{path}";
+            parent = parent.parent;
+        }
+        return path;
+    }
+
+    private static bool SnifferIsSimpleType(Type t)
+    {
+        return t.IsPrimitive
+            || t.IsEnum
+            || t == typeof(string)
+            || t == typeof(Vector3)
+            || t == typeof(Quaternion)
+            || t == typeof(Vector2)
+            || t == typeof(bool);
+    }
+
+    private static FieldInfo[] SnifferGetSimpleFields(Type t)
+    {
+        if (snifferFieldInfoCache.TryGetValue(t, out FieldInfo[] cached))
+        {
+            return cached;
+        }
+        var fields = new List<FieldInfo>();
+        foreach (
+            FieldInfo field in t.GetFields(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            )
+        )
+        {
+            if (SnifferIsSimpleType(field.FieldType))
+            {
+                fields.Add(field);
+            }
+        }
+        FieldInfo[] result = fields.ToArray();
+        snifferFieldInfoCache[t] = result;
+        return result;
+    }
+
+    private void SnifferLogComponent(MonoBehaviour comp, bool snapshot)
+    {
+        Type type = comp.GetType();
+        string className = type.Name;
+        int instanceId = comp.GetInstanceID();
+        foreach (FieldInfo field in SnifferGetSimpleFields(type))
+        {
+            object newValue = field.GetValue(comp);
+            if (snapshot)
+            {
+                SnifferWriteLine(true, className, field.Name, instanceId, newValue, newValue);
+                continue;
+            }
+            string key = $"{className}.{field.Name}#{instanceId}";
+            snifferLastValues.TryGetValue(key, out object oldValue);
+            if (Equals(oldValue, newValue))
+            {
+                continue;
+            }
+            snifferLastValues[key] = newValue;
+            SnifferWriteLine(false, className, field.Name, instanceId, oldValue, newValue);
+        }
+    }
+
+    private void SnifferWriteLine(
+        bool snapshot,
+        string className,
+        string fieldName,
+        int instanceId,
+        object oldValue,
+        object newValue
+    )
+    {
+        if (snifferWriter == null)
+        {
+            return;
+        }
+        string oldStr = oldValue == null ? "null" : oldValue.ToString();
+        string newStr = newValue == null ? "null" : newValue.ToString();
+        string prefix = snapshot ? $"{tickCount},SNAPSHOT" : tickCount.ToString();
+        snifferWriter.WriteLine($"{prefix},{className},{fieldName},{instanceId},{oldStr},{newStr}");
+    }
+
     private void OnGUI()
     {
         if (!configEnableDebugUi.Value)
@@ -677,6 +879,7 @@ public class Plugin : BaseUnityPlugin
         {
             socket.Stop();
         }
+        snifferWriter?.Dispose();
         Logger.LogInfo($"Plugin recorded {tickCount} ticks");
         Logger.LogInfo($"Plugin {MyPluginInfo.PLUGIN_GUID} is unloaded!");
     }
