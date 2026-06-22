@@ -16,7 +16,7 @@ public static class MyPluginInfo
 {
     public const string PLUGIN_GUID = "zorduzd";
     public const string PLUGIN_NAME = "zorduzd";
-    public const string PLUGIN_VERSION = "0.3.5";
+    public const string PLUGIN_VERSION = "0.3.6";
 }
 
 [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
@@ -56,6 +56,8 @@ public class Plugin : BaseUnityPlugin
     private ConfigEntry<bool> configSnifferIncludeProperties;
     private ConfigEntry<bool> configSnifferDepthOneExpansion;
     private ConfigEntry<bool> configSnifferLogComplexMarkers;
+    private ConfigEntry<bool> configSnifferExpandCollections;
+    private ConfigEntry<int> configSnifferCollectionElementLimit;
 
     // Debug ui
     private Rect windowRect = new Rect(100, 100, 450, 1200);
@@ -66,7 +68,10 @@ public class Plugin : BaseUnityPlugin
     private bool componentDumpDone;
     private readonly Dictionary<string, object> snifferLastFieldValues = new Dictionary<string, object>();
     private readonly Dictionary<string, object> snifferLastPropertyValues = new Dictionary<string, object>();
+    private readonly Dictionary<string, object> snifferLastCollectionElementValues =
+        new Dictionary<string, object>();
     private readonly HashSet<string> snifferWarnedPropertyKeys = new HashSet<string>();
+    private readonly HashSet<string> snifferLoggedOnceKeys = new HashSet<string>();
     private static readonly Dictionary<Type, SnifferTypeInfo> snifferTypeInfoCache =
         new Dictionary<Type, SnifferTypeInfo>();
 
@@ -123,6 +128,18 @@ public class Plugin : BaseUnityPlugin
             "logComplexMarkers",
             false,
             "Log a marker line (type + assembly) for complex members that are not depth-1 expanded. Off by default to limit log size."
+        );
+        configSnifferExpandCollections = Config.Bind(
+            "Sniffer",
+            "expandCollections",
+            true,
+            "Expand collection members element-by-element (simple fields/properties only, no further depth) up to collectionElementLimit."
+        );
+        configSnifferCollectionElementLimit = Config.Bind(
+            "Sniffer",
+            "collectionElementLimit",
+            8,
+            "Maximum number of collection elements to expand. Clamped to [1, 64]. Oversized collections log a single warning marker instead."
         );
         Logger.LogInfo("Configurations loaded");
 
@@ -406,6 +423,7 @@ public class Plugin : BaseUnityPlugin
         if (!MissionManager.IsRunning)
         {
             componentDumpDone = false;
+            snifferLoggedOnceKeys.Clear();
             return;
         }
         Aircraft aircraft;
@@ -917,7 +935,12 @@ public class Plugin : BaseUnityPlugin
         {
             if (SnifferIsCollection(valueType))
             {
-                SnifferLogCollectionMarker(className, instanceId, memberName, valueType, value, snapshot);
+                int count = SnifferGetCollectionCount(value);
+                SnifferLogCollectionMarker(className, instanceId, memberName, valueType, count, snapshot);
+                if (configSnifferExpandCollections.Value)
+                {
+                    SnifferExpandCollection(className, instanceId, memberName, value, count, snapshot);
+                }
                 return;
             }
 
@@ -935,7 +958,127 @@ public class Plugin : BaseUnityPlugin
 
         if (configSnifferLogComplexMarkers.Value)
         {
-            SnifferLogComplexMarker(className, instanceId, memberName, valueType, snapshot);
+            string markerKey = $"C:{instanceId}:{memberName}";
+            if (snifferLoggedOnceKeys.Add(markerKey))
+            {
+                SnifferLogComplexMarker(className, instanceId, memberName, valueType, snapshot);
+            }
+        }
+    }
+
+    private void SnifferExpandCollection(
+        string className,
+        int instanceId,
+        string memberName,
+        object collectionValue,
+        int count,
+        bool snapshot
+    )
+    {
+        if (count == 0)
+        {
+            return;
+        }
+
+        int limit = Math.Max(1, Math.Min(configSnifferCollectionElementLimit.Value, 64));
+        if (count > limit)
+        {
+            string warnKey = $"W:{instanceId}:{memberName}";
+            if (snifferLoggedOnceKeys.Add(warnKey))
+            {
+                SnifferWriteRaw(
+                    snapshot,
+                    className,
+                    "W",
+                    memberName,
+                    instanceId,
+                    "collection_too_large",
+                    count.ToString()
+                );
+            }
+            return;
+        }
+
+        if (collectionValue is not System.Collections.IEnumerable enumerable)
+        {
+            return;
+        }
+
+        int i = 0;
+        foreach (object element in enumerable)
+        {
+            SnifferLogCollectionElement(className, instanceId, memberName, i, element, snapshot);
+            i++;
+        }
+    }
+
+    private void SnifferLogCollectionElement(
+        string className,
+        int instanceId,
+        string memberName,
+        int index,
+        object element,
+        bool snapshot
+    )
+    {
+        if (element == null)
+        {
+            return;
+        }
+        Type elementType = element.GetType();
+        // Structs are skipped: reflection over a boxed copy can't be correlated back to the
+        // original list slot, so diffing them would be meaningless.
+        if (elementType.IsValueType)
+        {
+            return;
+        }
+        if (elementType.Assembly != typeof(Aircraft).Assembly)
+        {
+            return;
+        }
+        if (SnifferIsExcludedNamespace(elementType.Namespace))
+        {
+            return;
+        }
+
+        SnifferTypeInfo info = SnifferGetTypeInfo(elementType);
+        string elementPath = $"{memberName}[{index}]";
+
+        foreach (FieldInfo field in info.SimpleFields)
+        {
+            object newValue = field.GetValue(element);
+            string path = $"{elementPath}.{field.Name}";
+            SnifferLogSimpleValue(
+                snifferLastCollectionElementValues,
+                "F",
+                className,
+                path,
+                instanceId,
+                newValue,
+                snapshot
+            );
+        }
+
+        if (configSnifferIncludeProperties.Value)
+        {
+            foreach (PropertyInfo prop in info.SimpleProperties)
+            {
+                string path = $"{elementPath}.{prop.Name}";
+                string warnKey = $"{className}.{path}#{instanceId}";
+                if (!SnifferTryGetPropertyValue(element, prop, warnKey, out object newValue))
+                {
+                    continue;
+                }
+                SnifferLogSimpleValue(
+                    snifferLastCollectionElementValues,
+                    "P",
+                    className,
+                    path,
+                    instanceId,
+                    newValue,
+                    snapshot
+                );
+            }
         }
     }
 
@@ -985,12 +1128,11 @@ public class Plugin : BaseUnityPlugin
         int instanceId,
         string memberName,
         Type collectionType,
-        object value,
+        int count,
         bool snapshot
     )
     {
         string elementType = SnifferGetElementTypeName(collectionType);
-        int count = SnifferGetCollectionCount(value);
         SnifferWriteRaw(snapshot, className, "L", memberName, instanceId, elementType, count.ToString());
     }
 
