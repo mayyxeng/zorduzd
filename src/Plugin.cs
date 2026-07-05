@@ -45,6 +45,16 @@ public class Plugin : BaseUnityPlugin
     private bool cachedHasAirbrake;
     private ThrottleGauge cachedThrottleGauge;
 
+    // Rotor telemetry (helicopters only). The outputInterfaces field is known on Transmission
+    // at compile time, but its element type only implements IPowerOutput, so the
+    // angularSpeed/angularSpeedNominal FieldInfos must be resolved from the concrete runtime
+    // type the first time we successfully reach an element.
+    private static FieldInfo transmissionOutputInterfacesField;
+    private static FieldInfo rotorAngularSpeedField;
+    private static FieldInfo rotorAngularSpeedNominalField;
+    private Transmission cachedTransmission;
+    private bool rotorLookupWarned;
+
     // Configurations
     // private ConfigEntry<string> configIp;
     private ConfigEntry<int> configPort;
@@ -89,6 +99,7 @@ public class Plugin : BaseUnityPlugin
         );
         cmStationAmmoField = cmStationType.GetField("ammo");
         cmStationDisplayNameField = cmStationType.GetField("displayName");
+        transmissionOutputInterfacesField = typeof(Transmission).GetField("outputInterfaces", priv);
     }
 
     private void StartTcpListener()
@@ -122,6 +133,8 @@ public class Plugin : BaseUnityPlugin
         public float speedOfSound;
         public Vector3 windVelocity;
         public List<EngineTelemetry> engines;
+        public float rotorAngularSpeed;
+        public float rotorAngularSpeedNominal;
         public List<CanopyTelemetry> canopies;
         public LandingGear.GearState gearState;
 
@@ -222,6 +235,15 @@ public class Plugin : BaseUnityPlugin
                     append("afterburner_2", avgAb);
                 }
             }
+
+            float rotorRpm = rotorAngularSpeedNominal > 0f
+                ? rotorAngularSpeed * 60f / (2f * Mathf.PI)
+                : 0f;
+            float rotorRpmRatio = rotorAngularSpeedNominal > 0f
+                ? (rotorAngularSpeed / rotorAngularSpeedNominal) * 100f
+                : 0f;
+            append("helicopter_rotor_rpm", rotorRpm);
+            append("helicopter_rotor_rpm_ratio", rotorRpmRatio);
 
             if (canopies != null)
             {
@@ -417,6 +439,9 @@ public class Plugin : BaseUnityPlugin
 
             telemetryData.engines.Add(et);
         });
+
+        PopulateRotorTelemetry(aircraft);
+
         if (telemetryData.countermeasures == null)
         {
             telemetryData.countermeasures = new List<CountermeasureTelemetry>();
@@ -548,6 +573,66 @@ public class Plugin : BaseUnityPlugin
         telemetryData.weapon_name = string.Join("~", nonGunWeapons);
         // we have an alive pilot in the cockpit!
         SendTelemetryOverTcp();
+    }
+
+    private void PopulateRotorTelemetry(Aircraft aircraft)
+    {
+        telemetryData.rotorAngularSpeed = 0f;
+        telemetryData.rotorAngularSpeedNominal = 0f;
+
+        if (cachedTransmission == null)
+        {
+            cachedTransmission = aircraft.GetComponentInChildren<Transmission>(true);
+        }
+        if (cachedTransmission == null)
+        {
+            WarnRotorLookupFailedOnce("no Transmission component found on aircraft");
+            return;
+        }
+
+        object outputInterfacesObj = transmissionOutputInterfacesField?.GetValue(cachedTransmission);
+        if (outputInterfacesObj is not System.Collections.IList outputInterfaces || outputInterfaces.Count == 0)
+        {
+            WarnRotorLookupFailedOnce("Transmission.outputInterfaces is empty or missing");
+            return;
+        }
+
+        object rotorOutput = outputInterfaces[0];
+        if (rotorOutput == null)
+        {
+            WarnRotorLookupFailedOnce("Transmission.outputInterfaces[0] is null");
+            return;
+        }
+
+        if (rotorAngularSpeedField == null || rotorAngularSpeedNominalField == null)
+        {
+            Type rotorType = rotorOutput.GetType();
+            const BindingFlags anyInstance =
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+            rotorAngularSpeedField = rotorType.GetField("angularSpeed", anyInstance);
+            rotorAngularSpeedNominalField = rotorType.GetField("angularSpeedNominal", anyInstance);
+            if (rotorAngularSpeedField == null || rotorAngularSpeedNominalField == null)
+            {
+                WarnRotorLookupFailedOnce(
+                    $"angularSpeed/angularSpeedNominal not found on {rotorType.FullName}"
+                );
+                return;
+            }
+        }
+
+        telemetryData.rotorAngularSpeed = (float)rotorAngularSpeedField.GetValue(rotorOutput);
+        telemetryData.rotorAngularSpeedNominal = (float)
+            rotorAngularSpeedNominalField.GetValue(rotorOutput);
+    }
+
+    private void WarnRotorLookupFailedOnce(string reason)
+    {
+        if (rotorLookupWarned)
+        {
+            return;
+        }
+        rotorLookupWarned = true;
+        Logger.LogInfo($"Rotor telemetry unavailable: {reason}");
     }
 
     private void SendTelemetryOverTcp()

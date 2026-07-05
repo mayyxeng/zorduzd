@@ -206,6 +206,18 @@ pub struct MozaFFBData {
     /// Landing gear indicator light state.
     /// Range: 0.0 or 1.0.
     pub light_gear_indicator: f32,
+
+    /// Main rotor RPM (absolute), 0.0 for fixed-wing aircraft or if unavailable.
+    /// Range: 0.0 and up.
+    /// Source: zorduzd reflection on Transmission.outputInterfaces[0] (IPowerOutput),
+    /// NO-specific, no DCS Export.lua equivalent.
+    pub helicopter_rotor_rpm: f32,
+
+    /// Main rotor RPM as a percentage of nominal (governed) speed, 100.0 = nominal.
+    /// Range: 0.0 and up, 0.0 for fixed-wing aircraft or if unavailable.
+    /// Source: zorduzd reflection on Transmission.outputInterfaces[0] (IPowerOutput),
+    /// NO-specific, no DCS Export.lua equivalent.
+    pub helicopter_rotor_rpm_ratio: f32,
 }
 impl MozaFFBData {
     pub fn parse(s: &str) -> Self {
@@ -271,6 +283,12 @@ impl MozaFFBData {
                 "light_apu_ready" => data.light_apu_ready = value.parse().unwrap_or(0.0),
                 "light_gear_warning" => data.light_gear_warning = value.parse().unwrap_or(0.0),
                 "light_gear_indicator" => data.light_gear_indicator = value.parse().unwrap_or(0.0),
+                "helicopter_rotor_rpm" => {
+                    data.helicopter_rotor_rpm = value.parse().unwrap_or(0.0)
+                }
+                "helicopter_rotor_rpm_ratio" => {
+                    data.helicopter_rotor_rpm_ratio = value.parse().unwrap_or(0.0)
+                }
                 _ => {} // Ignore unknown fields
             }
         }
@@ -322,6 +340,8 @@ impl MozaFFBData {
             light_apu_ready,
             light_gear_warning,
             light_gear_indicator,
+            helicopter_rotor_rpm,
+            helicopter_rotor_rpm_ratio,
             raw_aircraft_name: _,
         } = self;
         ui.spacing_mut().slider_width = 50.0;
@@ -346,6 +366,11 @@ impl MozaFFBData {
                 .range(0.0..=100.0)
                 .suffix("%"),
         );
+        ui.end_row();
+
+        ui.label("Rotor RPM (Abs/Ratio%)");
+        ui.add(egui::DragValue::new(helicopter_rotor_rpm).suffix(" RPM"));
+        ui.add(egui::DragValue::new(helicopter_rotor_rpm_ratio).suffix("%"));
         ui.end_row();
 
         ui.label("Landing Gear (L/N/R)");
@@ -550,5 +575,7 @@ impl std::fmt::Display for MozaFFBData {
         light_apu_ready,
         light_gear_warning,
         light_gear_indicator,
+        helicopter_rotor_rpm,
+        helicopter_rotor_rpm_ratio,
     }
 }
