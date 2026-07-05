@@ -521,9 +521,29 @@ public class Plugin : BaseUnityPlugin
         WeaponStation currentGuns = aircraft.weaponManager.currentWeaponStation;
         if (currentGuns != null)
         {
-            telemetryData.weapon_name = currentGuns.WeaponInfo.name;
-            telemetryData.shells = currentGuns.Ammo;
+            telemetryData.shells = currentGuns.WeaponInfo.gun ? currentGuns.Ammo : 0;
         }
+        else
+        {
+            telemetryData.shells = 0;
+        }
+
+        var ammoByWeaponName = new Dictionary<string, int>();
+        foreach (WeaponStation station in aircraft.weaponStations)
+        {
+            if (station.WeaponInfo == null || station.WeaponInfo.gun)
+            {
+                continue;
+            }
+            ammoByWeaponName.TryGetValue(station.WeaponInfo.name, out int ammo);
+            ammoByWeaponName[station.WeaponInfo.name] = ammo + station.Ammo;
+        }
+        var nonGunWeapons = new List<string>();
+        foreach (KeyValuePair<string, int> entry in ammoByWeaponName)
+        {
+            nonGunWeapons.Add($"{entry.Key}-0.0.0.0*{entry.Value}");
+        }
+        telemetryData.weapon_name = string.Join("~", nonGunWeapons);
         // we have an alive pilot in the cockpit!
         SendTelemetryOverTcp();
     }
