@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -15,7 +16,7 @@ public static class MyPluginInfo
 {
     public const string PLUGIN_GUID = "zorduzd";
     public const string PLUGIN_NAME = "zorduzd";
-    public const string PLUGIN_VERSION = "0.3.2";
+    public const string PLUGIN_VERSION = "0.3.6";
 }
 
 [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
@@ -49,9 +50,38 @@ public class Plugin : BaseUnityPlugin
     // private ConfigEntry<string> configIp;
     private ConfigEntry<int> configPort;
     private ConfigEntry<bool> configEnableDebugUi;
+    private ConfigEntry<bool> configSnifferEnable;
+    private ConfigEntry<string> configSnifferTargetClassNameContains;
+    private ConfigEntry<string> configSnifferSnapshotKey;
+    private ConfigEntry<bool> configSnifferIncludeProperties;
+    private ConfigEntry<bool> configSnifferDepthOneExpansion;
+    private ConfigEntry<bool> configSnifferLogComplexMarkers;
+    private ConfigEntry<bool> configSnifferExpandCollections;
+    private ConfigEntry<int> configSnifferCollectionElementLimit;
 
     // Debug ui
     private Rect windowRect = new Rect(100, 100, 450, 1200);
+
+    // Sniffer state
+    private KeyCode snifferSnapshotKeyCode = KeyCode.F9;
+    private StreamWriter snifferWriter;
+    private bool componentDumpDone;
+    private readonly Dictionary<string, object> snifferLastFieldValues = new Dictionary<string, object>();
+    private readonly Dictionary<string, object> snifferLastPropertyValues = new Dictionary<string, object>();
+    private readonly Dictionary<string, object> snifferLastCollectionElementValues =
+        new Dictionary<string, object>();
+    private readonly HashSet<string> snifferWarnedPropertyKeys = new HashSet<string>();
+    private readonly HashSet<string> snifferLoggedOnceKeys = new HashSet<string>();
+    private static readonly Dictionary<Type, SnifferTypeInfo> snifferTypeInfoCache =
+        new Dictionary<Type, SnifferTypeInfo>();
+
+    private struct SnifferTypeInfo
+    {
+        public FieldInfo[] SimpleFields;
+        public FieldInfo[] ComplexFields;
+        public PropertyInfo[] SimpleProperties;
+        public PropertyInfo[] ComplexProperties;
+    }
 
     private void Awake()
     {
@@ -63,7 +93,68 @@ public class Plugin : BaseUnityPlugin
         // configIp = Config.Bind("Networking", "ip", IPAddress.Loopback.ToString(), "IP address to listen on");
         configPort = Config.Bind("Networking", "port", 3480, "TCP port to listen on");
         configEnableDebugUi = Config.Bind("Debug", "enableUi", false, "Enable debug UI");
+        configSnifferEnable = Config.Bind(
+            "Sniffer",
+            "enable",
+            false,
+            "Master switch for the telemetry field sniffer. Disabled by default; no files are written when off."
+        );
+        configSnifferTargetClassNameContains = Config.Bind(
+            "Sniffer",
+            "targetClassNameContains",
+            "",
+            "Case-insensitive substring filter for component class names to sniff. Empty disables field-diff logging (component tree dump still runs)."
+        );
+        configSnifferSnapshotKey = Config.Bind(
+            "Sniffer",
+            "snapshotKey",
+            "F9",
+            "Legacy Input Manager KeyCode name that triggers a forced snapshot dump of all matching components."
+        );
+        configSnifferIncludeProperties = Config.Bind(
+            "Sniffer",
+            "includeProperties",
+            true,
+            "Also sniff simple properties (not just fields) of matching components."
+        );
+        configSnifferDepthOneExpansion = Config.Bind(
+            "Sniffer",
+            "depthOneExpansion",
+            true,
+            "Reflect one level into complex (non-simple) members whose runtime type lives in Assembly-CSharp. If false, complex members are only logged via logComplexMarkers (if enabled)."
+        );
+        configSnifferLogComplexMarkers = Config.Bind(
+            "Sniffer",
+            "logComplexMarkers",
+            false,
+            "Log a marker line (type + assembly) for complex members that are not depth-1 expanded. Off by default to limit log size."
+        );
+        configSnifferExpandCollections = Config.Bind(
+            "Sniffer",
+            "expandCollections",
+            true,
+            "Expand collection members element-by-element (simple fields/properties only, no further depth) up to collectionElementLimit."
+        );
+        configSnifferCollectionElementLimit = Config.Bind(
+            "Sniffer",
+            "collectionElementLimit",
+            8,
+            "Maximum number of collection elements to expand. Clamped to [1, 64]. Oversized collections log a single warning marker instead."
+        );
         Logger.LogInfo("Configurations loaded");
+
+        if (configSnifferEnable.Value)
+        {
+            if (!Enum.TryParse<KeyCode>(configSnifferSnapshotKey.Value, true, out snifferSnapshotKeyCode))
+            {
+                Logger.LogWarning(
+                    $"Invalid Sniffer.snapshotKey '{configSnifferSnapshotKey.Value}', falling back to F9"
+                );
+                snifferSnapshotKeyCode = KeyCode.F9;
+            }
+            string snifferLogPath = Path.Combine(Paths.PluginPath, "zorduzd_sniffer.log");
+            snifferWriter = new StreamWriter(snifferLogPath, append: false) { AutoFlush = true };
+        }
 
         StartTcpListener();
         configPort.SettingChanged += (sender, args) => StartTcpListener();
@@ -330,6 +421,8 @@ public class Plugin : BaseUnityPlugin
         tickCount++;
         if (!MissionManager.IsRunning)
         {
+            componentDumpDone = false;
+            snifferLoggedOnceKeys.Clear();
             return;
         }
         Aircraft aircraft;
@@ -339,6 +432,9 @@ public class Plugin : BaseUnityPlugin
             // Logger.LogError("Could not retrive the local aircraft");
             return;
         }
+
+        RunSniffer(aircraft);
+
         if (aircraft.pilots.Length == 0)
         {
             Logger.LogError("Could not retrive the local pilot");
@@ -559,6 +655,612 @@ public class Plugin : BaseUnityPlugin
         }
     }
 
+    private void RunSniffer(Aircraft aircraft)
+    {
+        if (!configSnifferEnable.Value)
+        {
+            return;
+        }
+
+        SnifferDumpComponentsOnce(aircraft);
+
+        string filter = configSnifferTargetClassNameContains.Value;
+        if (string.IsNullOrEmpty(filter))
+        {
+            return;
+        }
+
+        var matches = new List<MonoBehaviour>();
+        foreach (MonoBehaviour comp in aircraft.GetComponentsInChildren<MonoBehaviour>(true))
+        {
+            if (comp.GetType().Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                matches.Add(comp);
+            }
+        }
+
+        foreach (MonoBehaviour comp in matches)
+        {
+            SnifferLogComponent(comp, snapshot: false);
+        }
+
+        // Legacy Input Manager, not the new Input System: a parallel control measurement in
+        // NOVR found the new Input System dropping keyboard events under OpenXR via Virtual
+        // Desktop, while the legacy manager kept working. Not verified in NO's non-VR mode,
+        // but legacy is the safe choice here at no extra cost.
+        if (UnityEngine.Input.GetKeyDown(snifferSnapshotKeyCode))
+        {
+            foreach (MonoBehaviour comp in matches)
+            {
+                SnifferLogComponent(comp, snapshot: true);
+            }
+        }
+    }
+
+    private void SnifferDumpComponentsOnce(Aircraft aircraft)
+    {
+        if (componentDumpDone)
+        {
+            return;
+        }
+        componentDumpDone = true;
+        try
+        {
+            string path = Path.Combine(Paths.PluginPath, "zorduzd_components.log");
+            using (var writer = new StreamWriter(path, append: false))
+            {
+                foreach (MonoBehaviour comp in aircraft.GetComponentsInChildren<MonoBehaviour>(true))
+                {
+                    writer.WriteLine($"{SnifferHierarchyPath(comp.transform)} :: {comp.GetType().FullName}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"Sniffer component dump failed: {ex.Message}");
+        }
+    }
+
+    private static string SnifferHierarchyPath(Transform t)
+    {
+        string path = t.name;
+        Transform parent = t.parent;
+        while (parent != null)
+        {
+            path = $"{parent.name}/{path}";
+            parent = parent.parent;
+        }
+        return path;
+    }
+
+    private static bool SnifferIsSimpleType(Type t)
+    {
+        return t.IsPrimitive
+            || t.IsEnum
+            || t == typeof(string)
+            || t == typeof(Vector3)
+            || t == typeof(Quaternion)
+            || t == typeof(Vector2)
+            || t == typeof(bool);
+    }
+
+    private static readonly string[] SnifferExcludedNamespacePrefixes =
+    {
+        "UnityEngine",
+        "Unity.",
+        "Mirage",
+        "System",
+    };
+
+    private static bool SnifferIsExcludedNamespace(string ns)
+    {
+        if (string.IsNullOrEmpty(ns))
+        {
+            return false;
+        }
+        foreach (string prefix in SnifferExcludedNamespacePrefixes)
+        {
+            if (ns == prefix || ns.StartsWith(prefix + ".", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool SnifferIsCollection(Type t)
+    {
+        return t.IsArray || typeof(System.Collections.IEnumerable).IsAssignableFrom(t);
+    }
+
+    private static SnifferTypeInfo SnifferGetTypeInfo(Type t)
+    {
+        if (snifferTypeInfoCache.TryGetValue(t, out SnifferTypeInfo cached))
+        {
+            return cached;
+        }
+
+        var simpleFields = new List<FieldInfo>();
+        var complexFields = new List<FieldInfo>();
+        foreach (
+            FieldInfo field in t.GetFields(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            )
+        )
+        {
+            if (SnifferIsSimpleType(field.FieldType))
+            {
+                simpleFields.Add(field);
+            }
+            else
+            {
+                complexFields.Add(field);
+            }
+        }
+
+        var simpleProperties = new List<PropertyInfo>();
+        var complexProperties = new List<PropertyInfo>();
+        foreach (
+            PropertyInfo prop in t.GetProperties(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            )
+        )
+        {
+            if (!prop.CanRead || prop.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+            if (SnifferIsSimpleType(prop.PropertyType))
+            {
+                simpleProperties.Add(prop);
+            }
+            else
+            {
+                complexProperties.Add(prop);
+            }
+        }
+
+        var info = new SnifferTypeInfo
+        {
+            SimpleFields = simpleFields.ToArray(),
+            ComplexFields = complexFields.ToArray(),
+            SimpleProperties = simpleProperties.ToArray(),
+            ComplexProperties = complexProperties.ToArray(),
+        };
+        snifferTypeInfoCache[t] = info;
+        return info;
+    }
+
+    private bool SnifferTryGetPropertyValue(
+        object instance,
+        PropertyInfo prop,
+        string warnKey,
+        out object value
+    )
+    {
+        try
+        {
+            value = prop.GetValue(instance);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            value = null;
+            if (snifferWarnedPropertyKeys.Add(warnKey))
+            {
+                Logger.LogWarning($"Sniffer: property getter '{warnKey}' threw: {ex.Message}");
+            }
+            return false;
+        }
+    }
+
+    private void SnifferLogComponent(MonoBehaviour comp, bool snapshot)
+    {
+        Type type = comp.GetType();
+        string className = type.Name;
+        int instanceId = comp.GetInstanceID();
+        SnifferTypeInfo info = SnifferGetTypeInfo(type);
+
+        foreach (FieldInfo field in info.SimpleFields)
+        {
+            object newValue = field.GetValue(comp);
+            SnifferLogSimpleValue(
+                snifferLastFieldValues,
+                "F",
+                className,
+                field.Name,
+                instanceId,
+                newValue,
+                snapshot
+            );
+        }
+
+        if (configSnifferIncludeProperties.Value)
+        {
+            foreach (PropertyInfo prop in info.SimpleProperties)
+            {
+                string warnKey = $"{className}.{prop.Name}#{instanceId}";
+                if (!SnifferTryGetPropertyValue(comp, prop, warnKey, out object newValue))
+                {
+                    continue;
+                }
+                SnifferLogSimpleValue(
+                    snifferLastPropertyValues,
+                    "P",
+                    className,
+                    prop.Name,
+                    instanceId,
+                    newValue,
+                    snapshot
+                );
+            }
+        }
+
+        foreach (FieldInfo field in info.ComplexFields)
+        {
+            object value = field.GetValue(comp);
+            SnifferHandleComplexMember(className, instanceId, field.Name, value, snapshot);
+        }
+
+        if (configSnifferIncludeProperties.Value)
+        {
+            foreach (PropertyInfo prop in info.ComplexProperties)
+            {
+                string warnKey = $"{className}.{prop.Name}#{instanceId}";
+                if (!SnifferTryGetPropertyValue(comp, prop, warnKey, out object value))
+                {
+                    continue;
+                }
+                SnifferHandleComplexMember(className, instanceId, prop.Name, value, snapshot);
+            }
+        }
+    }
+
+    private void SnifferHandleComplexMember(
+        string className,
+        int instanceId,
+        string memberName,
+        object value,
+        bool snapshot
+    )
+    {
+        if (value == null)
+        {
+            return;
+        }
+        Type valueType = value.GetType();
+
+        if (configSnifferDepthOneExpansion.Value)
+        {
+            if (SnifferIsCollection(valueType))
+            {
+                int count = SnifferGetCollectionCount(value);
+                SnifferLogCollectionMarker(className, instanceId, memberName, valueType, count, snapshot);
+                if (configSnifferExpandCollections.Value)
+                {
+                    SnifferExpandCollection(className, instanceId, memberName, value, count, snapshot);
+                }
+                return;
+            }
+
+            bool eligibleForExpansion =
+                !valueType.IsValueType
+                && valueType.Assembly == typeof(Aircraft).Assembly
+                && !SnifferIsExcludedNamespace(valueType.Namespace);
+
+            if (eligibleForExpansion)
+            {
+                SnifferLogDepth1(valueType, className, instanceId, memberName, value, snapshot);
+                return;
+            }
+        }
+
+        if (configSnifferLogComplexMarkers.Value)
+        {
+            string markerKey = $"C:{instanceId}:{memberName}";
+            if (snifferLoggedOnceKeys.Add(markerKey))
+            {
+                SnifferLogComplexMarker(className, instanceId, memberName, valueType, snapshot);
+            }
+        }
+    }
+
+    private void SnifferExpandCollection(
+        string className,
+        int instanceId,
+        string memberName,
+        object collectionValue,
+        int count,
+        bool snapshot
+    )
+    {
+        if (count == 0)
+        {
+            return;
+        }
+
+        int limit = Math.Max(1, Math.Min(configSnifferCollectionElementLimit.Value, 64));
+        if (count > limit)
+        {
+            string warnKey = $"W:{instanceId}:{memberName}";
+            if (snifferLoggedOnceKeys.Add(warnKey))
+            {
+                SnifferWriteRaw(
+                    snapshot,
+                    className,
+                    "W",
+                    memberName,
+                    instanceId,
+                    "collection_too_large",
+                    count.ToString()
+                );
+            }
+            return;
+        }
+
+        if (collectionValue is not System.Collections.IEnumerable enumerable)
+        {
+            return;
+        }
+
+        int i = 0;
+        foreach (object element in enumerable)
+        {
+            SnifferLogCollectionElement(className, instanceId, memberName, i, element, snapshot);
+            i++;
+        }
+    }
+
+    private void SnifferLogCollectionElement(
+        string className,
+        int instanceId,
+        string memberName,
+        int index,
+        object element,
+        bool snapshot
+    )
+    {
+        if (element == null)
+        {
+            return;
+        }
+        Type elementType = element.GetType();
+        // Structs are skipped: reflection over a boxed copy can't be correlated back to the
+        // original list slot, so diffing them would be meaningless.
+        if (elementType.IsValueType)
+        {
+            return;
+        }
+        if (elementType.Assembly != typeof(Aircraft).Assembly)
+        {
+            return;
+        }
+        if (SnifferIsExcludedNamespace(elementType.Namespace))
+        {
+            return;
+        }
+
+        SnifferTypeInfo info = SnifferGetTypeInfo(elementType);
+        string elementPath = $"{memberName}[{index}]";
+
+        foreach (FieldInfo field in info.SimpleFields)
+        {
+            object newValue = field.GetValue(element);
+            string path = $"{elementPath}.{field.Name}";
+            SnifferLogSimpleValue(
+                snifferLastCollectionElementValues,
+                "F",
+                className,
+                path,
+                instanceId,
+                newValue,
+                snapshot
+            );
+        }
+
+        if (configSnifferIncludeProperties.Value)
+        {
+            foreach (PropertyInfo prop in info.SimpleProperties)
+            {
+                string path = $"{elementPath}.{prop.Name}";
+                string warnKey = $"{className}.{path}#{instanceId}";
+                if (!SnifferTryGetPropertyValue(element, prop, warnKey, out object newValue))
+                {
+                    continue;
+                }
+                SnifferLogSimpleValue(
+                    snifferLastCollectionElementValues,
+                    "P",
+                    className,
+                    path,
+                    instanceId,
+                    newValue,
+                    snapshot
+                );
+            }
+        }
+    }
+
+    private void SnifferLogDepth1(
+        Type innerType,
+        string className,
+        int instanceId,
+        string outerMemberName,
+        object innerValue,
+        bool snapshot
+    )
+    {
+        SnifferTypeInfo info = SnifferGetTypeInfo(innerType);
+
+        foreach (FieldInfo field in info.SimpleFields)
+        {
+            object newValue = field.GetValue(innerValue);
+            string path = $"{outerMemberName}.{field.Name}";
+            SnifferLogSimpleValue(snifferLastFieldValues, "F", className, path, instanceId, newValue, snapshot);
+        }
+
+        if (configSnifferIncludeProperties.Value)
+        {
+            foreach (PropertyInfo prop in info.SimpleProperties)
+            {
+                string path = $"{outerMemberName}.{prop.Name}";
+                string warnKey = $"{className}.{path}#{instanceId}";
+                if (!SnifferTryGetPropertyValue(innerValue, prop, warnKey, out object newValue))
+                {
+                    continue;
+                }
+                SnifferLogSimpleValue(
+                    snifferLastPropertyValues,
+                    "P",
+                    className,
+                    path,
+                    instanceId,
+                    newValue,
+                    snapshot
+                );
+            }
+        }
+    }
+
+    private void SnifferLogCollectionMarker(
+        string className,
+        int instanceId,
+        string memberName,
+        Type collectionType,
+        int count,
+        bool snapshot
+    )
+    {
+        string elementType = SnifferGetElementTypeName(collectionType);
+        SnifferWriteRaw(snapshot, className, "L", memberName, instanceId, elementType, count.ToString());
+    }
+
+    private static string SnifferGetElementTypeName(Type collectionType)
+    {
+        if (collectionType.IsArray)
+        {
+            return collectionType.GetElementType()?.Name ?? "?";
+        }
+        if (collectionType.IsGenericType)
+        {
+            Type[] args = collectionType.GetGenericArguments();
+            if (args.Length > 0)
+            {
+                return args[0].Name;
+            }
+        }
+        return "object";
+    }
+
+    private static int SnifferGetCollectionCount(object value)
+    {
+        if (value is System.Collections.ICollection coll)
+        {
+            return coll.Count;
+        }
+        int count = 0;
+        if (value is System.Collections.IEnumerable enumerable)
+        {
+            foreach (object _ in enumerable)
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void SnifferLogComplexMarker(
+        string className,
+        int instanceId,
+        string memberName,
+        Type valueType,
+        bool snapshot
+    )
+    {
+        SnifferWriteRaw(
+            snapshot,
+            className,
+            "C",
+            memberName,
+            instanceId,
+            valueType.FullName ?? valueType.Name,
+            valueType.Assembly.GetName().Name
+        );
+    }
+
+    private void SnifferLogSimpleValue(
+        Dictionary<string, object> store,
+        string kind,
+        string className,
+        string path,
+        int instanceId,
+        object newValue,
+        bool snapshot
+    )
+    {
+        if (snapshot)
+        {
+            SnifferWriteLine(true, className, kind, path, instanceId, newValue, newValue);
+            return;
+        }
+        string key = $"{className}.{path}#{instanceId}";
+        store.TryGetValue(key, out object oldValue);
+        if (Equals(oldValue, newValue))
+        {
+            return;
+        }
+        store[key] = newValue;
+        SnifferWriteLine(false, className, kind, path, instanceId, oldValue, newValue);
+    }
+
+    private void SnifferWriteLine(
+        bool snapshot,
+        string className,
+        string kind,
+        string path,
+        int instanceId,
+        object oldValue,
+        object newValue
+    )
+    {
+        SnifferWriteRaw(
+            snapshot,
+            className,
+            kind,
+            path,
+            instanceId,
+            FormatSniffValue(oldValue),
+            FormatSniffValue(newValue)
+        );
+    }
+
+    private void SnifferWriteRaw(
+        bool snapshot,
+        string className,
+        string kind,
+        string path,
+        int instanceId,
+        string col6,
+        string col7
+    )
+    {
+        if (snifferWriter == null)
+        {
+            return;
+        }
+        string prefix = snapshot ? $"{tickCount},SNAPSHOT" : tickCount.ToString();
+        snifferWriter.WriteLine($"{prefix},{className},{kind},{path},{instanceId},{col6},{col7}");
+    }
+
+    private static string FormatSniffValue(object v)
+    {
+        if (v == null)
+            return "null";
+        if (v is IFormattable f)
+            return f.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+        return v.ToString();
+    }
+
     private void OnGUI()
     {
         if (!configEnableDebugUi.Value)
@@ -676,6 +1378,7 @@ public class Plugin : BaseUnityPlugin
         {
             socket.Stop();
         }
+        snifferWriter?.Dispose();
         Logger.LogInfo($"Plugin recorded {tickCount} ticks");
         Logger.LogInfo($"Plugin {MyPluginInfo.PLUGIN_GUID} is unloaded!");
     }
