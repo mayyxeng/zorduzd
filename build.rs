@@ -140,6 +140,13 @@ fn embed_icon() -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    // Skip the dotnet build, game DLL lookup, and icon embedding in CI.
+    // The C# plugin requires proprietary game DLLs (Mirage.dll, Assembly-CSharp.dll)
+    // that cannot be distributed, so CI only builds and lints the Rust side.
+    println!("cargo:rerun-if-env-changed=BUILD_ON_CI");
+    if env::var("BUILD_ON_CI").is_ok() {
+        return Ok(());
+    }
     check_tools()?;
     populate_ext_dlls()?;
     add_dotnet_sources()?;
