@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+// #![windows_subsystem = "windows"]
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -26,9 +26,10 @@ struct CfgPorts {
     game: u16,
 }
 
-const AIRCRAFT_MAPPING_TEMPLATE: &str = "\n[aircraft_mapping]\n\
-# NO-interner aircraft_name (siehe BepInEx Debug-UI) -> DCS-Telemetrie-Name\n\
-# Beispiel: attackhelo1 = \"AH-64D_BLK_II\"\n";
+const AIRCRAFT_MAPPING_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/aircraft_mapping.cfg"
+));
 
 impl Cfg {
     fn from_shared_state(state: &SharedState) -> Self {
