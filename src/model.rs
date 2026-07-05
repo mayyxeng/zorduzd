@@ -283,9 +283,7 @@ impl MozaFFBData {
                 "light_apu_ready" => data.light_apu_ready = value.parse().unwrap_or(0.0),
                 "light_gear_warning" => data.light_gear_warning = value.parse().unwrap_or(0.0),
                 "light_gear_indicator" => data.light_gear_indicator = value.parse().unwrap_or(0.0),
-                "helicopter_rotor_rpm" => {
-                    data.helicopter_rotor_rpm = value.parse().unwrap_or(0.0)
-                }
+                "helicopter_rotor_rpm" => data.helicopter_rotor_rpm = value.parse().unwrap_or(0.0),
                 "helicopter_rotor_rpm_ratio" => {
                     data.helicopter_rotor_rpm_ratio = value.parse().unwrap_or(0.0)
                 }
