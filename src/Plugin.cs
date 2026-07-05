@@ -294,10 +294,9 @@ public class Plugin : BaseUnityPlugin
                     break;
             }
             append("gear_value", gear_value);
-            float on_ground = altitude == 0.0F ? 1.0F : 0.0F;
-            append("nose_gear", gear_value * on_ground);
-            append("left_gear", gear_value * on_ground);
-            append("right_gear", gear_value * on_ground);
+            append("nose_gear", gear_value);
+            append("left_gear", gear_value);
+            append("right_gear", gear_value);
             append("weapon", weapon_name);
             append("cannon_shells", shells);
 
