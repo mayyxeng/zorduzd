@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{aircrafts::Aircraft, UiTunnable};
+use crate::{UiTunnable, aircrafts::Aircraft};
 
 /// Telemetry data structure used by Moza Cockpit to communicate with DCS World.
 ///
@@ -16,6 +16,12 @@ pub struct MozaFFBData {
     /// Type name of the aircraft (e.g., "A-10C", "F-16C_50").
     /// Source: `LoGetSelfData().Name`
     pub aircraft_name: Aircraft,
+
+    /// Raw, unparsed `aircraft_name` value as received from the game, kept alongside the
+    /// matched `aircraft_name` enum so callers with access to a user-configured NO->DCS
+    /// name mapping (which this module is intentionally decoupled from) can still recover it.
+    #[serde(skip)]
+    pub raw_aircraft_name: String,
 
     /// Left engine RPM as a percentage.
     /// Range: 0.0 to 100.0 (Standard DCS) or 0.0 to 1.0.
@@ -226,6 +232,7 @@ impl MozaFFBData {
 
             match key {
                 "aircraft_name" => {
+                    data.raw_aircraft_name = value.to_string();
                     if let Some(a) = Aircraft::from_telemetry_name(value) {
                         data.aircraft_name = a;
                     }
@@ -335,6 +342,7 @@ impl MozaFFBData {
             light_gear_indicator,
             helicopter_rotor_rpm,
             helicopter_rotor_rpm_ratio,
+            raw_aircraft_name: _,
         } = self;
         ui.spacing_mut().slider_width = 50.0;
         ui.label("Aircraft");
