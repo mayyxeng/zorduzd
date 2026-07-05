@@ -1,6 +1,8 @@
 #![windows_subsystem = "windows"]
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use zorduzd::aircrafts::Aircraft;
 use zorduzd::app::App;
 
 use eframe::NativeOptions;
@@ -11,6 +13,11 @@ use zorduzd::worker::*;
 #[derive(serde::Deserialize, serde::Serialize)]
 struct Cfg {
     ports: CfgPorts,
+    /// Raw NO aircraft name -> DCS telemetry name. Validated against
+    /// `Aircraft::from_telemetry_name` in `load_cfg` before being handed to the worker.
+    /// Intentionally has no code defaults: every entry must come from the user's config.
+    #[serde(default, skip_serializing)]
+    aircraft_mapping: HashMap<String, String>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -19,6 +26,10 @@ struct CfgPorts {
     game: u16,
 }
 
+const AIRCRAFT_MAPPING_TEMPLATE: &str = "\n[aircraft_mapping]\n\
+# NO-interner aircraft_name (siehe BepInEx Debug-UI) -> DCS-Telemetrie-Name\n\
+# Beispiel: attackhelo1 = \"AH-64D_BLK_II\"\n";
+
 impl Cfg {
     fn from_shared_state(state: &SharedState) -> Self {
         Self {
@@ -26,6 +37,7 @@ impl Cfg {
                 moza: state.moza_port.read(),
                 game: state.game_port.read(),
             },
+            aircraft_mapping: HashMap::new(),
         }
     }
 }
@@ -58,7 +70,8 @@ fn load_cfg(shared_state: &SharedState) {
     if !cfg_path.exists() {
         let defaults = Cfg::from_shared_state(shared_state);
         match toml::to_string_pretty(&defaults) {
-            Ok(contents) => {
+            Ok(mut contents) => {
+                contents.push_str(AIRCRAFT_MAPPING_TEMPLATE);
                 if let Err(e) = std::fs::write(&cfg_path, contents) {
                     log::warn!("could not write default {}: {e}", cfg_path.display());
                 }
@@ -83,6 +96,24 @@ fn load_cfg(shared_state: &SharedState) {
     };
     shared_state.moza_port.write(cfg.ports.moza);
     shared_state.game_port.write(cfg.ports.game);
+
+    let mut validated_mapping = HashMap::new();
+    for (no_name, dcs_name) in &cfg.aircraft_mapping {
+        match Aircraft::from_telemetry_name(dcs_name) {
+            Some(aircraft) => {
+                validated_mapping.insert(no_name.to_lowercase(), aircraft);
+            }
+            None => {
+                let valid_names: Vec<&str> =
+                    Aircraft::all().iter().map(|a| a.telemetry_name()).collect();
+                log::error!(
+                    "invalid aircraft_mapping entry: NO aircraft '{no_name}' maps to unknown DCS name '{dcs_name}'; valid names are: {}",
+                    valid_names.join(", ")
+                );
+            }
+        }
+    }
+    shared_state.set_aircraft_mapping(validated_mapping);
 }
 
 fn main() {
