@@ -541,6 +541,8 @@ public class Plugin : BaseUnityPlugin
         var nonGunWeapons = new List<string>();
         foreach (KeyValuePair<string, int> entry in ammoByWeaponName)
         {
+            // Moza Cockpit expects the DCS weapon format: Name-level1.level2.level3.level4*count
+            // (see MOZA/Weapon.lua). Nuclear Option has no such IDs, so we use 0.0.0.0 as a placeholder.
             nonGunWeapons.Add($"{entry.Key}-0.0.0.0*{entry.Value}");
         }
         telemetryData.weapon_name = string.Join("~", nonGunWeapons);
