@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{aircrafts::Aircraft, UiTunnable};
+use crate::{UiTunnable, aircrafts::Aircraft};
 
 /// Telemetry data structure used by Moza Cockpit to communicate with DCS World.
 ///

@@ -251,7 +251,12 @@ impl Worker {
         if lookup_name.is_empty() {
             return;
         }
-        let mapped = self.shared_state.aircraft_mapping.read().get(&lookup_name).copied();
+        let mapped = self
+            .shared_state
+            .aircraft_mapping
+            .read()
+            .get(&lookup_name)
+            .copied();
         match mapped {
             Some(aircraft) => {
                 data.aircraft_name = aircraft;
