@@ -1,4 +1,4 @@
-// #![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 use std::collections::HashMap;
 use std::sync::Arc;
 
