@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{aircrafts::Aircraft, UiTunnable};
+use crate::UiTunnable;
 
 /// Telemetry data structure used by Moza Cockpit to communicate with DCS World.
 ///
@@ -11,11 +11,12 @@ use crate::{aircrafts::Aircraft, UiTunnable};
 ///   Location: `%USERPROFILE%\Saved Games\DCS\Scripts\MOZA\MOZA.lua`
 /// - **Telemetry Units Reference**: Units (m/s, Radians, Gs) are confirmed via the VPforce documentation.
 ///   Docs: [VPforce TelemFFB Documentation](https://docs.vpforce.eu/rhino/the-vpforce-telemffb-application/#understanding-native-dcs-ffb-telemffb-and-vpforce-configurator)
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MozaFFBData {
-    /// Type name of the aircraft (e.g., "A-10C", "F-16C_50").
-    /// Source: `LoGetSelfData().Name`
-    pub aircraft_name: Aircraft,
+    /// Type name of the aircraft as forwarded to Moza Cockpit (e.g., "A-10C_2", "NO_CI22_Cricket").
+    /// Set from raw telemetry in `parse()`, then overwritten by the aircraft_mapping in the worker.
+    /// Source: `LoGetSelfData().Name` (before mapping)
+    pub aircraft_name: String,
 
     /// Left engine RPM as a percentage.
     /// Range: 0.0 to 100.0 (Standard DCS) or 0.0 to 1.0.
@@ -200,6 +201,69 @@ pub struct MozaFFBData {
     /// Landing gear indicator light state.
     /// Range: 0.0 or 1.0.
     pub light_gear_indicator: f32,
+
+    /// Main rotor RPM (absolute), 0.0 for fixed-wing aircraft or if unavailable.
+    /// Range: 0.0 and up.
+    /// Source: zorduzd reflection on Transmission.outputInterfaces[0] (IPowerOutput),
+    /// NO-specific, no DCS Export.lua equivalent.
+    pub helicopter_rotor_rpm: f32,
+
+    /// Main rotor RPM as a percentage of nominal (governed) speed, 100.0 = nominal.
+    /// Range: 0.0 and up, 0.0 for fixed-wing aircraft or if unavailable.
+    /// Source: zorduzd reflection on Transmission.outputInterfaces[0] (IPowerOutput),
+    /// NO-specific, no DCS Export.lua equivalent.
+    pub helicopter_rotor_rpm_ratio: f32,
+}
+impl Default for MozaFFBData {
+    fn default() -> Self {
+        Self {
+            aircraft_name: "A-10C_2".to_string(),
+            engine_rpm_left: 0.0,
+            engine_rpm_right: 0.0,
+            left_gear: 0.0,
+            nose_gear: 0.0,
+            right_gear: 0.0,
+            acc_x: 0.0,
+            acc_y: 0.0,
+            acc_z: 0.0,
+            wind_x: 0.0,
+            wind_y: 0.0,
+            wind_z: 0.0,
+            vector_velocity_x: 0.0,
+            vector_velocity_y: 0.0,
+            vector_velocity_z: 0.0,
+            tas: 0.0,
+            ias: 0.0,
+            vertical_velocity_speed: 0.0,
+            aoa: 0.0,
+            heading: 0.0,
+            pitch: 0.0,
+            bank: 0.0,
+            aos: 0.0,
+            euler_vx: 0.0,
+            euler_vy: 0.0,
+            euler_vz: 0.0,
+            canopy_pos: 0.0,
+            flap_pos: 0.0,
+            gear_value: 0.0,
+            speedbrake_value: 0.0,
+            afterburner_1: 0.0,
+            afterburner_2: 0.0,
+            weapon: String::new(),
+            flare: 0.0,
+            chaff: 0.0,
+            cannon_shells: 0,
+            mach: 0.0,
+            h_above_sea_level: 0.0,
+            led_console: 0.0,
+            led_instruments_result: 0.0,
+            light_apu_ready: 0.0,
+            light_gear_warning: 0.0,
+            light_gear_indicator: 0.0,
+            helicopter_rotor_rpm: 0.0,
+            helicopter_rotor_rpm_ratio: 0.0,
+        }
+    }
 }
 impl MozaFFBData {
     pub fn parse(s: &str) -> Self {
@@ -214,9 +278,7 @@ impl MozaFFBData {
 
             match key {
                 "aircraft_name" => {
-                    if let Some(a) = Aircraft::from_telemetry_name(value) {
-                        data.aircraft_name = a;
-                    }
+                    data.aircraft_name = value.to_string();
                 }
                 "engine_rpm_left" => data.engine_rpm_left = value.parse().unwrap_or(0.0),
                 "engine_rpm_right" => data.engine_rpm_right = value.parse().unwrap_or(0.0),
@@ -264,6 +326,12 @@ impl MozaFFBData {
                 "light_apu_ready" => data.light_apu_ready = value.parse().unwrap_or(0.0),
                 "light_gear_warning" => data.light_gear_warning = value.parse().unwrap_or(0.0),
                 "light_gear_indicator" => data.light_gear_indicator = value.parse().unwrap_or(0.0),
+                "helicopter_rotor_rpm" => {
+                    data.helicopter_rotor_rpm = value.parse().unwrap_or(0.0)
+                }
+                "helicopter_rotor_rpm_ratio" => {
+                    data.helicopter_rotor_rpm_ratio = value.parse().unwrap_or(0.0)
+                }
                 _ => {} // Ignore unknown fields
             }
         }
@@ -315,16 +383,12 @@ impl MozaFFBData {
             light_apu_ready,
             light_gear_warning,
             light_gear_indicator,
+            helicopter_rotor_rpm,
+            helicopter_rotor_rpm_ratio,
         } = self;
         ui.spacing_mut().slider_width = 50.0;
         ui.label("Aircraft");
-        egui::ComboBox::from_id_salt("selected aircraft")
-            .selected_text(aircraft_name.ui_name())
-            .show_ui(ui, |ui| {
-                for aircraft in Aircraft::all() {
-                    ui.selectable_value(aircraft_name, aircraft, aircraft.ui_name());
-                }
-            });
+        ui.add(egui::TextEdit::singleline(aircraft_name).desired_width(200.0));
         ui.end_row();
 
         ui.label("Engine RPM (L/R)");
@@ -338,6 +402,11 @@ impl MozaFFBData {
                 .range(0.0..=100.0)
                 .suffix("%"),
         );
+        ui.end_row();
+
+        ui.label("Rotor RPM (Abs/Ratio%)");
+        ui.add(egui::DragValue::new(helicopter_rotor_rpm).suffix(" RPM"));
+        ui.add(egui::DragValue::new(helicopter_rotor_rpm_ratio).suffix("%"));
         ui.end_row();
 
         ui.label("Landing Gear (L/N/R)");
@@ -419,7 +488,7 @@ impl MozaFFBData {
         ui.end_row();
 
         ui.label("Weapon System");
-        ui.add(egui::TextEdit::singleline(weapon).desired_width(100.0));
+        ui.add(egui::TextEdit::singleline(weapon).desired_width(200.0));
         ui.add(
             egui::DragValue::new(cannon_shells)
                 .range(0.0..=10000.0)
@@ -480,7 +549,7 @@ impl UiTunnable for MozaFFBData {
                     .num_columns(6)
                     .spacing([20.0, 10.0])
                     .min_col_width(80.0)
-                    .max_col_width(80.0)
+                    .max_col_width(220.0)
                     .striped(true)
                     .show(ui, |ui| self.tune_in_grid(ui))
             });
@@ -542,5 +611,7 @@ impl std::fmt::Display for MozaFFBData {
         light_apu_ready,
         light_gear_warning,
         light_gear_indicator,
+        helicopter_rotor_rpm,
+        helicopter_rotor_rpm_ratio,
     }
 }

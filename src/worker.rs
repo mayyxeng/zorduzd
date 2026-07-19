@@ -1,5 +1,6 @@
 use egui::mutex::Mutex;
 use egui::mutex::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -17,6 +18,7 @@ pub struct Worker {
     moza_stream: Option<TcpStream>,
     server: Option<TcpListener>,
     string_buffer: String,
+    last_warned_unknown_name: Option<String>,
 }
 
 impl Worker {
@@ -27,6 +29,7 @@ impl Worker {
             moza_stream: None,
             server: None,
             string_buffer: String::new(),
+            last_warned_unknown_name: None,
         }
     }
 }
@@ -40,6 +43,7 @@ pub struct SharedState {
     pub game_port: TcpPort,
     pub logs: LogState,
     pub data: RwLock<MozaFFBData>,
+    pub aircraft_mapping: RwLock<HashMap<String, String>>,
 }
 impl SharedState {
     pub fn new() -> Self {
@@ -52,7 +56,14 @@ impl SharedState {
             game_port: TcpPort(Mutex::new((NUCLEAR_OPTION_DEFAULT_PORT, true))),
             logs: LogState(Default::default()),
             data: Default::default(),
+            aircraft_mapping: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Replaces the validated NO-aircraft-name -> DCS-aircraft mapping used by the worker.
+    /// Keys must already be lowercased; see `Worker::apply_aircraft_mapping`.
+    pub fn set_aircraft_mapping(&self, map: HashMap<String, String>) {
+        *self.aircraft_mapping.write() = map;
     }
 }
 impl Default for SharedState {
@@ -92,6 +103,9 @@ impl ConnectionState {
 impl LogState {
     pub fn append_error(&self, message: impl std::fmt::Display) {
         self.0.write().push(format!("ERROR: {message}"));
+    }
+    pub fn append_warning(&self, message: impl std::fmt::Display) {
+        self.0.write().push(format!("WARN: {message}"));
     }
     pub fn append_info(&self, message: impl std::fmt::Display) {
         self.0.write().push(format!("INFO: {message}"));
@@ -228,6 +242,36 @@ impl Worker {
         }
     }
 
+    /// Overrides `data.aircraft_name` using the user-configured NO->DCS mapping, looked up
+    /// by the raw NO aircraft name `parse()` could not (or happened to) resolve on its own.
+    /// `MozaFFBData::parse` stays decoupled from `SharedState`, so this runs here instead.
+    fn apply_aircraft_mapping(&mut self, data: &mut MozaFFBData) {
+        let lookup_name = data.aircraft_name.trim().to_lowercase();
+        if lookup_name.is_empty() {
+            return;
+        }
+        let mapped = self
+            .shared_state
+            .aircraft_mapping
+            .read()
+            .get(&lookup_name)
+            .cloned();
+        match mapped {
+            Some(target) => {
+                data.aircraft_name = target;
+            }
+            None => {
+                if self.last_warned_unknown_name.as_deref() != Some(lookup_name.as_str()) {
+                    self.last_warned_unknown_name = Some(lookup_name.clone());
+                    self.shared_state.logs.append_warning(format!(
+                        "unknown aircraft \"{}\", falling back to A-10C_2",
+                        data.aircraft_name.trim()
+                    ));
+                }
+            }
+        }
+    }
+
     async fn forward_data(&mut self) {
         if self.game_stream.is_none() {
             return;
@@ -237,7 +281,7 @@ impl Worker {
         self.debug_check_state();
 
         self.string_buffer.clear();
-        let data = match self
+        let mut data = match self
             .game_stream
             .as_mut()
             .unwrap()
@@ -260,6 +304,7 @@ impl Worker {
                 return;
             }
         };
+        self.apply_aircraft_mapping(&mut data);
         let message = data.to_string();
         *self.shared_state.data.write() = data;
         if let Err(err) = self

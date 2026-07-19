@@ -1,4 +1,5 @@
 #![windows_subsystem = "windows"]
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use zorduzd::app::App;
@@ -11,6 +12,10 @@ use zorduzd::worker::*;
 #[derive(serde::Deserialize, serde::Serialize)]
 struct Cfg {
     ports: CfgPorts,
+    /// Raw NO aircraft name -> Moza target name. Any string is valid; no validation against known DCS names.
+    /// Intentionally has no code defaults: every entry must come from the user's config.
+    #[serde(default, skip_serializing)]
+    aircraft_mapping: HashMap<String, String>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -19,6 +24,10 @@ struct CfgPorts {
     game: u16,
 }
 
+const AIRCRAFT_MAPPING_TEMPLATE: &str = "\n[aircraft_mapping]\n\
+# NO-interner aircraft_name (siehe BepInEx Debug-UI) -> DCS-Telemetrie-Name\n\
+# Beispiel: attackhelo1 = \"AH-64D_BLK_II\"\n";
+
 impl Cfg {
     fn from_shared_state(state: &SharedState) -> Self {
         Self {
@@ -26,6 +35,7 @@ impl Cfg {
                 moza: state.moza_port.read(),
                 game: state.game_port.read(),
             },
+            aircraft_mapping: HashMap::new(),
         }
     }
 }
@@ -58,7 +68,8 @@ fn load_cfg(shared_state: &SharedState) {
     if !cfg_path.exists() {
         let defaults = Cfg::from_shared_state(shared_state);
         match toml::to_string_pretty(&defaults) {
-            Ok(contents) => {
+            Ok(mut contents) => {
+                contents.push_str(AIRCRAFT_MAPPING_TEMPLATE);
                 if let Err(e) = std::fs::write(&cfg_path, contents) {
                     log::warn!("could not write default {}: {e}", cfg_path.display());
                 }
@@ -83,6 +94,13 @@ fn load_cfg(shared_state: &SharedState) {
     };
     shared_state.moza_port.write(cfg.ports.moza);
     shared_state.game_port.write(cfg.ports.game);
+
+    let mapping = cfg
+        .aircraft_mapping
+        .into_iter()
+        .map(|(no_name, target)| (no_name.to_lowercase(), target))
+        .collect();
+    shared_state.set_aircraft_mapping(mapping);
 }
 
 fn main() {
