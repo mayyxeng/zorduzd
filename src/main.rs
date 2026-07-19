@@ -2,7 +2,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use zorduzd::aircrafts::Aircraft;
 use zorduzd::app::App;
 
 use eframe::NativeOptions;
@@ -13,8 +12,7 @@ use zorduzd::worker::*;
 #[derive(serde::Deserialize, serde::Serialize)]
 struct Cfg {
     ports: CfgPorts,
-    /// Raw NO aircraft name -> DCS telemetry name. Validated against
-    /// `Aircraft::from_telemetry_name` in `load_cfg` before being handed to the worker.
+    /// Raw NO aircraft name -> Moza target name. Any string is valid; no validation against known DCS names.
     /// Intentionally has no code defaults: every entry must come from the user's config.
     #[serde(default, skip_serializing)]
     aircraft_mapping: HashMap<String, String>,
@@ -98,23 +96,12 @@ fn load_cfg(shared_state: &SharedState) {
     shared_state.moza_port.write(cfg.ports.moza);
     shared_state.game_port.write(cfg.ports.game);
 
-    let mut validated_mapping = HashMap::new();
-    for (no_name, dcs_name) in &cfg.aircraft_mapping {
-        match Aircraft::from_telemetry_name(dcs_name) {
-            Some(aircraft) => {
-                validated_mapping.insert(no_name.to_lowercase(), aircraft);
-            }
-            None => {
-                let valid_names: Vec<&str> =
-                    Aircraft::all().iter().map(|a| a.telemetry_name()).collect();
-                log::error!(
-                    "invalid aircraft_mapping entry: NO aircraft '{no_name}' maps to unknown DCS name '{dcs_name}'; valid names are: {}",
-                    valid_names.join(", ")
-                );
-            }
-        }
-    }
-    shared_state.set_aircraft_mapping(validated_mapping);
+    let mapping = cfg
+        .aircraft_mapping
+        .into_iter()
+        .map(|(no_name, target)| (no_name.to_lowercase(), target))
+        .collect();
+    shared_state.set_aircraft_mapping(mapping);
 }
 
 fn main() {

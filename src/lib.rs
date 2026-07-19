@@ -1,4 +1,3 @@
-pub mod aircrafts;
 pub mod app;
 pub mod model;
 pub mod worker;
