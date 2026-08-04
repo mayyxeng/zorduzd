@@ -10,7 +10,6 @@ use tokio::net::{TcpListener, TcpStream};
 
 pub const MOZA_COCKPIT_DEFAULT_PORT: u16 = 3476;
 pub const NUCLEAR_OPTION_DEFAULT_PORT: u16 = 3480;
-use crate::aircrafts::Aircraft;
 use crate::model::MozaFFBData;
 
 pub struct Worker {
@@ -44,7 +43,7 @@ pub struct SharedState {
     pub game_port: TcpPort,
     pub logs: LogState,
     pub data: RwLock<MozaFFBData>,
-    pub aircraft_mapping: RwLock<HashMap<String, Aircraft>>,
+    pub aircraft_mapping: RwLock<HashMap<String, String>>,
 }
 impl SharedState {
     pub fn new() -> Self {
@@ -63,7 +62,7 @@ impl SharedState {
 
     /// Replaces the validated NO-aircraft-name -> DCS-aircraft mapping used by the worker.
     /// Keys must already be lowercased; see `Worker::apply_aircraft_mapping`.
-    pub fn set_aircraft_mapping(&self, map: HashMap<String, Aircraft>) {
+    pub fn set_aircraft_mapping(&self, map: HashMap<String, String>) {
         *self.aircraft_mapping.write() = map;
     }
 }
@@ -247,7 +246,7 @@ impl Worker {
     /// by the raw NO aircraft name `parse()` could not (or happened to) resolve on its own.
     /// `MozaFFBData::parse` stays decoupled from `SharedState`, so this runs here instead.
     fn apply_aircraft_mapping(&mut self, data: &mut MozaFFBData) {
-        let lookup_name = data.raw_aircraft_name.trim().to_lowercase();
+        let lookup_name = data.aircraft_name.trim().to_lowercase();
         if lookup_name.is_empty() {
             return;
         }
@@ -256,17 +255,18 @@ impl Worker {
             .aircraft_mapping
             .read()
             .get(&lookup_name)
-            .copied();
+            .cloned();
         match mapped {
-            Some(aircraft) => {
-                data.aircraft_name = aircraft;
+            Some(target) => {
+                data.aircraft_name = target;
             }
             None => {
                 if self.last_warned_unknown_name.as_deref() != Some(lookup_name.as_str()) {
                     self.last_warned_unknown_name = Some(lookup_name.clone());
                     self.shared_state.logs.append_warning(format!(
-                        "unknown aircraft \"{}\", falling back to A-10C_2",
-                        data.raw_aircraft_name.trim()
+                        "unknown aircraft \"{}\", falling back to default \"{}\"",
+                        lookup_name.trim(),
+                        data.aircraft_name,
                     ));
                 }
             }
