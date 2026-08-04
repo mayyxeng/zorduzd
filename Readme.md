@@ -9,6 +9,8 @@ Zorduzd is a tiny mod to enable force feedback on Moza flight sticks in Nuclear 
   - [Configuring Moza Cockpit](#configuring-moza-cockpit)
   - [Configuring the Ports](#configuring-the-ports)
   - [Configuring the FFB Feel](#configuring-the-ffb-feel)
+  - [Aircraft Name Mapping via `zorduzd.cfg`](#aircraft-name-mapping-via-zorduzdcfg)
+  - [Defining Custom Aircraft](#defining-custom-aircraft)
   - [Manual Download](#manual-download)
   - [How it works](#how-it-works)
     - [A BepInEx plugin](#a-bepinex-plugin)
@@ -24,7 +26,7 @@ Zorduzd is a tiny mod to enable force feedback on Moza flight sticks in Nuclear 
 ## Using Nuclear Option Mod Manager (NOMM)
 If you have [NOMM](https://github.com/Combat787/NOMM/releases), then the setup process is quite easy, simply look for `zorduzd` in NOMM and install it.
 
-<div style="width: 50%; align">
+<div style="width: 50%">
     <img src="assets/nomm.png" alt="zorduzd is on NOMM"/>
 </div>
 
@@ -56,7 +58,7 @@ If you have DCS installed on your system, and you've configured Moza Cockpit wit
 Otherwise, run `DCS.exe` from the mod (under `Zorduzd\DCS World\bin\DCS.exe`).
 This should open up an application that looks like this:
 
-<div style="width: 50%; align">
+<div style="width: 50%">
     <img src="assets/ui.png" alt="DCS UI"/>
 </div>
 
@@ -74,7 +76,7 @@ Click on it!
 This will create a `DCS` folder under `%USERPROFILE%\Saved Games`, e.g., that's `C:\Users\John Doe\Saved Games`.
 Now, open up Moza Cockpit and select `DCS` from the left panel:
 
-<div style="width: 80%; align">
+<div style="width: 80%">
     <img src="assets/moza-dcs.png" alt="DCS UI"/>
 </div>
 
@@ -88,7 +90,7 @@ The _Telemetry Port Number_ must also match the port number you saw earlier in t
 
 With all done, you should reopen `DCS.exe` and this time see:
 
-<div style="width: 50%; align">
+<div style="width: 50%">
     <img src="assets/ui-good-state.png" alt="DCS UI good state"/>
 </div>
 
@@ -100,15 +102,14 @@ To better adjust the force feedback, you have to play with [Moza cockpit profile
 
 ## Configuring the Ports
 You should probably never need to do this, but you can change the ports over which the game and the fake `DCS` app communicate.
-1. Plugin: while in game press `f1` (requires [BepInEx configuration manager]) and modify the port the game uses to stream its data.
+1. Plugin: while in game press `f1` (requires [BepInEx configuration manager](https://github.com/BepInEx/BepInEx.ConfigurationManager)) and modify the port the game uses to stream its data.
 2. `DCS.exe`: before starting the program, modify `zorduzd.cfg` (if it does not exist, run `DCS.exe` once and quit) to set your desired ports. `moza` must match the port that Moza Cockpit sets for DCS and the `game` port must match the one from step 1.
 
 
 
 ## Configuring the FFB Feel
 To configure how the FFB feels, you must open Moza Cockpit and load or create your profile.
-At the moment, the mod makes Moza Cockpit believe that DCS is running and the user is flying an A-10C-II Warthog.
-This is probably a good representation for the A-19 aircraft in Nuclear Option, but for others you must create and load your desired profile.
+By default, the mod makes Moza Cockpit believe that DCS is running and the user is flying an A-10C-II Warthog, but you can configure per-aircraft mapping via [`zorduzd.cfg`](#aircraft-name-mapping-via-zorduzdcfg).
 Additionally, Moza does not enable lots of cool FFB effects like wind turbulence, or even weapon discharge, so even with the default A-10C-II config, you might want to turn on and adjust more effects.
 E.g., here is what I have:
 
@@ -120,6 +121,39 @@ E.g., here is what I have:
         <img src="assets/effects_moza.png" alt="enable extra effects"/>
     </div>
 </div>
+
+## Aircraft Name Mapping via `zorduzd.cfg`
+You can map Nuclear Option aircraft to DCS aircraft profiles in your config file. Moza Cockpit uses the aircraft name to select FFB profiles, so this lets you pick which DCS profile each NO aircraft uses.
+
+On first launch, `zorduzd.cfg` is generated with an `[aircraft_mapping]` section containing sensible defaults and a full list of available DCS target names. To customize it, open `zorduzd.cfg` and edit the mappings:
+
+```toml
+[aircraft_mapping]
+# NO aircraft name = DCS telemetry name
+"CI-22 Cricket" = "P-51D"
+"A-19 Brawler" = "A-10C_2"
+"FS-12 Revoker" = "F-16C_50"
+"SAH-46 Chicane" = "AH-64D_BLK_II"
+```
+
+## Defining Custom Aircraft
+Moza cockpit installation contains a bunch of json files that define the available aircraft.
+By default, you'll find them in:
+```powershell
+C:\Program Files (x86)\MOZA Cockpit\bin\aircraft_database\
+```
+
+This repository contains a set of new aircraft definitions for NO under `moza_aircraft_database`, so that you will not need to override your DCS profiles.
+You can copy them to Moza's expected directory (make sure to restart Moza afterwards) and then create new profiles for NO-specific aircraft.
+Additionally, you must update your `zorduzd.cfg` to use these newly defined aircraft, for instance:
+```toml
+[aircraft_mapping]
+# left side  = exact aircraftParameters.aircraftName (lowercase) from the NO debug window
+# right side = aircraft_uid from the corresponding JSON file in moza_aircraft_database/
+"ci-22 cricket"    = "NO_CI22_Cricket"
+"t/a-30 compass"   = "NO_TA30_Compass"
+"a-19 brawler"     = "NO_A19_Brawler"
+```
 
 ## Manual Download
 
