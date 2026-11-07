@@ -143,17 +143,47 @@ By default, you'll find them in:
 C:\Program Files (x86)\MOZA Cockpit\bin\aircraft_database\
 ```
 
-This repository contains a set of new aircraft definitions for NO under `moza_aircraft_database`, so that you will not need to override your DCS profiles.
-You can copy them to Moza's expected directory (make sure to restart Moza afterwards) and then create new profiles for NO-specific aircraft.
-Additionally, you must update your `zorduzd.cfg` to use these newly defined aircraft, for instance:
-```toml
-[aircraft_mapping]
-# left side  = exact aircraftParameters.aircraftName (lowercase) from the NO debug window
-# right side = aircraft_uid from the corresponding JSON file in moza_aircraft_database/
-"ci-22 cricket"    = "NO_CI22_Cricket"
-"t/a-30 compass"   = "NO_TA30_Compass"
-"a-19 brawler"     = "NO_A19_Brawler"
-```
+This repository contains aircraft definitions for all NO aircraft (vanilla and popular mods) under
+`moza_aircraft_database`, and a matching AB6 preset for each one under `moza_presets`, so that you will not
+need to override your DCS profiles.
+
+### Why the IDs end in a DCS aircraft name
+Moza Cockpit only runs engine, rotor and afterburner effects (jet engine vibration, afterburner vibration,
+propeller vibration, rotor vibration, blade slap) when it knows the aircraft *class*: `JetAircraft`,
+`PropellerAircraft` or `Helicopter`. For DCS it looks the class up by aircraft ID in a list built into
+`MOZA Cockpit.exe`; the definition JSON has no class field, and a class sent in the telemetry
+(`aircraft_type`, `engine_type`, `class_name`) is ignored. An unknown ID gets class `NONE`, so these effects
+never start.
+
+An ID that *contains* a listed DCS ID gets that ID's class, while presets still bind to the exact full ID.
+So every NO ID ends in a class carrier:
+
+| Suffix | Class | Aircraft |
+|---|---|---|
+| `_F-16C_50` | JetAircraft | all jets |
+| `_P-51D` | PropellerAircraft | CI-22 Cricket, OA-27 Cavalier, A-19 Brawler, VL-49 Tarantula |
+| `_UH-1H` | Helicopter | SAH-46 Chicane, UH-90 Ibis, RAH-72 Knockout, AH-31 Kukri |
+
+Tested with Moza Cockpit 1.1.5.42: `NO_Kukri_UH-1H` and `UH-1H_NO_Kukri` → Helicopter, `F-16C_50_NO` →
+JetAircraft, `P-51D`, `FW-190D9`, `TF-51D` and `C-130J-30` → PropellerAircraft; `F-16`, `Yak-52` and
+`Christen Eagle II` → `NONE`.
+
+### Installing
+1. Close Moza Cockpit and copy `moza_aircraft_database/*.json` into Moza's `aircraft_database` folder
+   (remove older `NO_*.json` files first; the IDs changed). Start Moza Cockpit.
+2. In Moza Cockpit, import every file in `moza_presets` (AB6). Each preset is bound to its aircraft ID, so
+   Moza's AUTO mode picks it when you fly that aircraft. `NO F-16M King Viper (force-sensing)` is not
+   auto-selected; pick it by hand if you want it.
+3. Replace the `[aircraft_mapping]` section of your `zorduzd.cfg` with
+   `moza_aircraft_database/aircraft_mapping_no_presets.cfg` (keep `[ports]`). Do not end up with two
+   `[aircraft_mapping]` headers or a repeated name, or zorduzd ignores the file.
+4. Fly, and check Moza's Telemetry FFB page: `Class Name` should read `JetAircraft`, `PropellerAircraft` or
+   `Helicopter`, and `Unique ID` the NO ID.
+
+Notes:
+* The propeller presets use an Engine Speed Range of 25-450 (zorduzd sends engine RPM as 0-100 %). Moza's
+  slider can't set a range that narrow, so don't move it, or it jumps to about 5-605.
+* Some specs of mod aircraft (top speed, G limit) are estimates.
 
 ## Manual Download
 
